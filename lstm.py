@@ -1,17 +1,20 @@
 #-*- coding: utf-8 -*-
 
-import numpy as np
-from matplotlib import pyplot as plt
-import argparse
+import numpy as np 						# for computing
+from matplotlib import pyplot as plt 	# for plotting
+import argparse 						# for argument parsing from command line
+import pickle 							# for data dumping as checkpoint files
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-i', '--input', help='training file', default="hello.txt")
-parser.add_argument('-o', '--output', help='sample file', default="sample.txt")
+parser.add_argument('-c', '--checkpoint', help='checkpoint file', default='')
+parser.add_argument('-o', '--output', help='sample file', default="hello")
 parser.add_argument('--lstm_size', help='number of hidden units', type=int, default=128)
 parser.add_argument('--seq_length', help='sequence length', type=int, default=25)
 parser.add_argument('--learning_rate', help='learning rate', type=int, default=-1)
-parser.add_argument('--sample_interval', help='sample interval', type=int, default=100)
-parser.add_argument('--sample_length', help='sample length', type=int, default=250)
+parser.add_argument('--sample_interval', help='sample interval', type=int, default=1000)
+parser.add_argument('--checkpoint_interval', help='checkpoint interval', type=int, default=1000)
+parser.add_argument('--sample_length', help='sample length', type=int, default=500)
 parser.add_argument('--plot', help='plot the error', default=False)
 args = parser.parse_args()
 
@@ -29,49 +32,98 @@ def tanh(x):
 def der_tanh(x):
 	return 1.0 - np.tanh(x) ** 2
 
-inputFile = args.input
+"""
+	Creating checkpoints shall be done in a more compact manner. 
+	Multi layers will be problematic and redundant if not done so.
+"""
+
+def saveWeights():
+	weights = {}
+	weights['Wz'] = Wz
+	weights['Wi'] = Wi
+	weights['Wf'] = Wf
+	weights['Wo'] = Wo
+	weights['Rz'] = Rz
+	weights['Ri'] = Ri
+	weights['Rf'] = Rf
+	weights['Ro'] = Ro
+	weights['bz'] = bz
+	weights['bi'] = bi
+	weights['bf'] = bf
+	weights['bo'] = bo
+	weights['Wy'] = Wy
+	weights['by'] = by	
+	weights['iteration'] = iteration
+	weights['smooth_loss'] = smooth_loss
+	weights['lstm_size'] = lstm_size
+
+	checkpoint = open(args.output + '.checkpoint', 'wb')
+	pickle.dump(weights, checkpoint)
+	checkpoint.close()
+
+def loadWeights():
+	checkpoint = open(args.checkpoint, 'rb')
+	weights = pickle.load(checkpoint)
+	checkpoint.close()
+	global Wz, Wi, Wf, Wo, Rz, Ri, Rf, Ro, bz, bi, bf, bo, Wy, by, lstm_size, iteration, smooth_loss
+	Wz = weights['Wz']
+	Wi = weights['Wi']
+	Wf = weights['Wf']
+	Wo = weights['Wo']
+	Rz = weights['Rz']
+	Ri = weights['Ri']
+	Rf = weights['Rf']
+	Ro = weights['Ro']
+	bz = weights['bz']
+	bi = weights['bi']
+	bf = weights['bf']
+	bo = weights['bo']
+	Wy = weights['Wy']
+	by = weights['by']
+	iteration = weights['iteration']
+	smooth_loss = weights['smooth_loss']
+	lstm_size = weights['lstm_size'] # override default value or specified value
+
+input_file = args.input
+file_name = '.'.join(input_file.split('.')[0:-1])
 lstm_size = args.lstm_size
 seq_length = args.seq_length
 learning_rate = pow(10, int(args.learning_rate))
-sample_interval = args.sample_interval
-sample_length = args.sample_length
-outputFile = args.output + '.out'
-weightScale = 1e-2
+output_file = args.output + '.out'
+weight_scale = 1e-2
 
-data = open(inputFile, 'r').read().decode('utf-8')
-words = list(set(data.split(' ')))
-chars = list(set(data))
-data_size = len(data)
+input_text = open(input_file, 'r').read().decode('utf-8')
+words = list(set(input_text.split(' ')))
+chars = list(set(input_text))
+input_text_length = len(input_text)
 vocab_size = len(chars)
-
-#print 'input has %d chars, %d of which are unique.' % (data_size, vocab_size)
 
 char_to_ix = { ch:i for i,ch in enumerate(chars) }
 ix_to_char = { i:ch for i,ch in enumerate(chars) }
 
-Wz, Wi, Wf, Wo = [], [], [], []
+if args.checkpoint is not '':
+	loadWeights()
+else:
+	Wz = np.random.randn(lstm_size, vocab_size) * weight_scale
+	Wi = np.random.randn(lstm_size, vocab_size) * weight_scale
+	Wf = np.random.randn(lstm_size, vocab_size) * weight_scale
+	Wo = np.random.randn(lstm_size, vocab_size) * weight_scale
+	
+	Rz = np.random.randn(lstm_size, lstm_size) * weight_scale
+	Ri = np.random.randn(lstm_size, lstm_size) * weight_scale
+	Rf = np.random.randn(lstm_size, lstm_size) * weight_scale
+	Ro = np.random.randn(lstm_size, lstm_size) * weight_scale
+	
+	bz = np.zeros((lstm_size, 1))
+	bi = np.zeros((lstm_size, 1))
+	bf = np.zeros((lstm_size, 1))
+	bo = np.zeros((lstm_size, 1))
+	
+	Wy = np.random.randn(vocab_size, lstm_size) * weight_scale
+	by = np.zeros((vocab_size, 1))
 
-Wz.append(np.random.randn(lstm_size, vocab_size) * weightScale)
-Wi.append(np.random.randn(lstm_size, vocab_size) * weightScale)
-Wf.append(np.random.randn(lstm_size, vocab_size) * weightScale)
-Wo.append(np.random.randn(lstm_size, vocab_size) * weightScale)
-
-Rz, Ri, Rf, Ro = [], [], [], []
-
-Rz.append(np.random.randn(lstm_size, lstm_size) * weightScale)
-Ri.append(np.random.randn(lstm_size, lstm_size) * weightScale)
-Rf.append(np.random.randn(lstm_size, lstm_size) * weightScale)
-Ro.append(np.random.randn(lstm_size, lstm_size) * weightScale)
-
-bz, bi, bf, bo = [], [], [], []
-
-bz.append(np.zeros((lstm_size, 1)))
-bi.append(np.zeros((lstm_size, 1)))
-bf.append(np.zeros((lstm_size, 1)))
-bo.append(np.zeros((lstm_size, 1)))
-
-Wy = np.random.randn(vocab_size, lstm_size) * weightScale
-by = np.zeros((vocab_size, 1))
+	iteration = 0
+	smooth_loss = -np.log(1.0 / vocab_size) * seq_length
 
 
 def lossFun(inputs, targets, hprev, cprev):
@@ -89,18 +141,18 @@ def lossFun(inputs, targets, hprev, cprev):
 		x[t][inputs[t]] = 1
 		
 		# LSTM layer 1
-		z_[t] = np.dot(Wz[0], x[t]) + np.dot(Rz[0], h[t-1]) + bz[0]
+		z_[t] = np.dot(Wz, x[t]) + np.dot(Rz, h[t-1]) + bz
 		z[t] = tanh(z_[t])
 
-		i_[t] = np.dot(Wi[0], x[t]) + np.dot(Ri[0], h[t-1]) + bi[0]
+		i_[t] = np.dot(Wi, x[t]) + np.dot(Ri, h[t-1]) + bi
 		i[t] = sigmoid(i_[t])
 		
-		f_[t] = np.dot(Wf[0], x[t]) + np.dot(Rf[0], h[t-1]) + bf[0]
+		f_[t] = np.dot(Wf, x[t]) + np.dot(Rf, h[t-1]) + bf
 		f[t] = sigmoid(f_[t])
 
 		c[t] = i[t] * z[t] + f[t] * c[t-1]
 
-		o_[t] = np.dot(Wo[0], x[t]) + np.dot(Ro[0], h[t-1]) + bo[0]
+		o_[t] = np.dot(Wo, x[t]) + np.dot(Ro, h[t-1]) + bo
 		o[t] = sigmoid(o_[t])
 
 		h[t] = tanh(c[t]) * o[t]
@@ -114,20 +166,20 @@ def lossFun(inputs, targets, hprev, cprev):
 		# loss
 		loss += -np.log(p[t][targets[t], 0])
 
-	dWz = np.zeros_like(Wz[0])
-	dWi = np.zeros_like(Wi[0])
-	dWf = np.zeros_like(Wf[0])
-	dWo = np.zeros_like(Wo[0])
+	dWz = np.zeros_like(Wz)
+	dWi = np.zeros_like(Wi)
+	dWf = np.zeros_like(Wf)
+	dWo = np.zeros_like(Wo)
 
-	dRz = np.zeros_like(Rz[0])
-	dRi = np.zeros_like(Ri[0])
-	dRf = np.zeros_like(Rf[0])
-	dRo = np.zeros_like(Ro[0])
+	dRz = np.zeros_like(Rz)
+	dRi = np.zeros_like(Ri)
+	dRf = np.zeros_like(Rf)
+	dRo = np.zeros_like(Ro)
 
-	dbz = np.zeros_like(bz[0])
-	dbi = np.zeros_like(bi[0])
-	dbf = np.zeros_like(bf[0])
-	dbo = np.zeros_like(bo[0])
+	dbz = np.zeros_like(bz)
+	dbi = np.zeros_like(bi)
+	dbf = np.zeros_like(bf)
+	dbo = np.zeros_like(bo)
 
 	dWy = np.zeros_like(Wy)
 	dby = np.zeros_like(by)
@@ -150,10 +202,10 @@ def lossFun(inputs, targets, hprev, cprev):
 		dby += dy[t]
 		
 		dh[t] = np.dot(Wy.T, dy[t])
-		dh[t] += np.dot(Rz[0].T, dz[t+1])
-		dh[t] += np.dot(Ri[0].T, di[t+1])
-		dh[t] += np.dot(Rf[0].T, df[t+1])
-		dh[t] += np.dot(Ro[0].T, do[t+1])
+		dh[t] += np.dot(Rz.T, dz[t+1])
+		dh[t] += np.dot(Ri.T, di[t+1])
+		dh[t] += np.dot(Rf.T, df[t+1])
+		dh[t] += np.dot(Ro.T, do[t+1])
 
 		do[t] = dh[t] * tanh(c[t]) * der_sigmoid(o_[t])
 
@@ -189,19 +241,20 @@ def sample(h, c, seed_ix, n):
 	x = np.zeros((vocab_size, 1))
 	x[seed_ix] = 1
 	ixes = []
-	for t in xrange(n):
-		z_ = np.dot(Wz[0], x) + np.dot(Rz[0], h) + bz[0]
+	t = 0
+	while (t < n):# or (ix_to_char[ixes[-1]] != ' '): # also generate characters until the last word is completed
+		z_ = np.dot(Wz, x) + np.dot(Rz, h) + bz
 		z = tanh(z_)
 
-		i_ = np.dot(Wi[0], x) + np.dot(Ri[0], h) + bi[0]
+		i_ = np.dot(Wi, x) + np.dot(Ri, h) + bi
 		i = sigmoid(i_)
 
-		f_ = np.dot(Wf[0], x) + np.dot(Rf[0], h) + bf[0]
+		f_ = np.dot(Wf, x) + np.dot(Rf, h) + bf
 		f = sigmoid(f_)
 
 		c = i * z + f * c
 
-		o_ = np.dot(Wo[0], x) + np.dot(Ro[0], h) + bo[0]
+		o_ = np.dot(Wo, x) + np.dot(Ro, h) + bo
 		o = sigmoid(o_)
 
 		h = tanh(c) * o
@@ -214,82 +267,93 @@ def sample(h, c, seed_ix, n):
 		x = np.zeros((vocab_size, 1))
 		x[ix] = 1
 		ixes.append(ix)
+		t = t + 1
 	return ixes
 
+mWz = np.zeros_like(Wz)
+mWf = np.zeros_like(Wf)
+mWi = np.zeros_like(Wi)
+mWo = np.zeros_like(Wo)
 
-mWz = np.zeros_like(Wz[0])
-mWf = np.zeros_like(Wf[0])
-mWi = np.zeros_like(Wi[0])
-mWo = np.zeros_like(Wo[0])
+mRz = np.zeros_like(Rz)
+mRf = np.zeros_like(Rf)
+mRi = np.zeros_like(Ri)
+mRo = np.zeros_like(Ro)
 
-mRz = np.zeros_like(Rz[0])
-mRf = np.zeros_like(Rf[0])
-mRi = np.zeros_like(Ri[0])
-mRo = np.zeros_like(Ro[0])
-
-mbz = np.zeros_like(bz[0])
-mbi = np.zeros_like(bi[0])
-mbf = np.zeros_like(bf[0])
-mbo = np.zeros_like(bo[0])
+mbz = np.zeros_like(bz)
+mbi = np.zeros_like(bi)
+mbf = np.zeros_like(bf)
+mbo = np.zeros_like(bo)
 
 mWy = np.zeros_like(Wy)
 mby = np.zeros_like(by)
 
-smooth_loss = -np.log(1.0 / vocab_size) * seq_length
-n, p = 0, 0
+loss_over_time = []
 
-lossData = []
+hprev = np.zeros((lstm_size, 1))
+cprev = np.zeros((lstm_size, 1))
+pointer = 0
+
+fo = open(output_file, 'a')
+fo.write('\n\n***********\n   start   \n***********\n'.encode('utf-8', 'ignore'))
+fo.close()
 
 try:
 	while True:
-		fo = open(outputFile, 'a')
+		fo = open(output_file, 'a')
 		
-		if p + seq_length + 1 >= len(data) or n == 0:
+		if pointer + seq_length + 1 >= input_text_length:
 			hprev = np.zeros((lstm_size, 1))
 			cprev = np.zeros((lstm_size, 1))
-			p = 0
+			pointer = 0
 
-		inputs = [char_to_ix[ch] for ch in data[p:p+seq_length]]
-		targets = [char_to_ix[ch] for ch in data[p+1:p+seq_length+1]]
+		inputs = [char_to_ix[ch] for ch in input_text[pointer:pointer+seq_length]]
+		targets = [char_to_ix[ch] for ch in input_text[pointer+1:pointer+seq_length+1]]
 
-		if n % sample_interval == 0:
-			sample_ix = sample(hprev, cprev, inputs[0], sample_length)
+		if iteration % args.sample_interval == 0:
+			sample_ix = sample(hprev, cprev, inputs[0], args.sample_length)
 			txt = ''.join(ix_to_char[ix] for ix in sample_ix)
-			txt = txt.encode('utf-8', 'ignore')
 			sampled_words = list(set(txt.split(' ')))
 			correct = 0
 			for word in sampled_words:
 				if word in words:
 					correct = correct + 1
 			accuracy = correct * 1.0 / len(sampled_words)
-			fo.write('\n----\n' + txt + '\n----\n')
+			txt = txt.encode('utf-8', 'ignore')
+			fo.write('\n-----\n' + txt + '\n-----\n')
 
 		loss, dWz, dWi, dWf, dWo, dRz, dRi, dRf, dRo, dbz, dbi, dbf, dbo, dWy, dby, hprev, cprev = lossFun(inputs, targets, hprev, cprev)
 		smooth_loss = smooth_loss * 0.999 + loss * 0.001
 		if args.plot:
-			lossData.append(smooth_loss)
+			loss_over_time.append(smooth_loss)
 
 		for param, dparam, mem in zip(
-			[Wz[0], Wf[0], Wi[0], Wo[0], Rz[0], Rf[0], Ri[0], Ro[0], bz[0], bf[0], bi[0], bo[0], Wy, by],
+			[Wz, Wf, Wi, Wo, Rz, Rf, Ri, Ro, bz, bf, bi, bo, Wy, by],
 			[dWz, dWf, dWi, dWo, dRz, dRf, dRi, dRo, dbz, dbf, dbi, dbo, dWy, dby],
 			[mWz, mWf, mWi, mWo, mRz, mRf, mRi, mRo, mbz, mbf, mbi, mbo, mWy, mby]):
 
 			mem += dparam * dparam
 			param += -learning_rate * dparam / np.sqrt(mem + 1e-8)
 
-		if n % sample_interval == 0:
+		
+		if iteration % args.sample_interval == 0:
 			if args.plot:
 				plt.clf()
-				plt.plot(lossData)
+				plt.plot(loss_over_time)
 				plt.pause(0.1)
-			fo.write('iteration: ' + str(n) + ', loss: ' + str(smooth_loss))
-			print 'iteration: %d, loss: %.2f, accuracy: %.2f' % (n, smooth_loss, accuracy)
+			status = 'iteration: %d, loss: %.2f, accuracy: %.2f' % (iteration, smooth_loss, accuracy)
+			fo.write(status)
+			print status
 
-		p += seq_length
-		n += 1
+		if iteration % args.checkpoint_interval == 0:
+			saveWeights()
+
+		pointer += seq_length
+		iteration += 1
 		
 		fo.close()
 
 except KeyboardInterrupt:
 	fo.close()
+	print "\n"
 	exit
